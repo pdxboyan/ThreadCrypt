@@ -4,7 +4,6 @@
 #include <getopt.h>
 #include <pthread.h>
 #include <crypt.h>
-#include <sys/time.h>
 #include <sys/stat.h>
 #include "thread_crypt.h"
 
@@ -110,22 +109,18 @@ int main(int argc, char *argv[]) {
 					if(opsData.algo == 0) {
 						opsData.saltLen = 2;	
 					}
-					else if(opsData.algo == 1) {
-						if(opsData.saltLen > 8 || opsData.saltLen <= 4) {
-							fprintf(stderr, "invalid salt length for MD-5!\n");
-							exit(EXIT_FAILURE);
-						}
+					else if(opsData.algo == 1) {								// validating salt length for MD-5
+						if(opsData.saltLen > 8) opsData.saltLen = 8;
+						else if(opsData.saltLen < 4) opsData.saltLen = 4;
 					}
-					else {
-						if(opsData.saltLen > 16 || opsData.saltLen <= 8) { 
-							fprintf(stderr, "invalid salt length for SHA!\n");
-							exit(EXIT_FAILURE);
-						}
+					else {														// validating salt length for SHA256 and SHA512
+						if(opsData.saltLen > 16) opsData.saltLen = 16;	
+						else if(opsData.saltLen < 8) opsData.saltLen = 8;
 					}	
 					break;
 
 				case 'R':	
-					opsData.rFlag = 1;													// processing seed
+					opsData.rFlag = 1;											// processing seed
 					opsData.seed = strtol(optarg, (char **) NULL, 10);	
 					break;
 
@@ -167,7 +162,7 @@ int main(int argc, char *argv[]) {
 
 	threads = malloc(numThreads * sizeof(pthread_t));		
 		
-	for(int tid = 0; tid < numThreads; tid++) {			// initializing threads
+	for(int tid = 0; tid < numThreads; tid++) {								// setting threads loose on the world
 		pthread_create(&threads[tid], NULL, input, (void *) &opsData);
 	}
 	for(int tid = 0; tid < numThreads; tid++) {
@@ -194,8 +189,8 @@ void *input(void * voidOpsData) {
 	struct crypt_data data;
 
 	do {
-		data.initialized = 0;
-		pthread_mutex_lock(&mutex);
+		data.initialized = 0;									// must be newly reset each time its used
+		pthread_mutex_lock(&mutex);								// mutex for strok()
 
 		if(!tokFlag) {
 			tokFlag = 1;
@@ -207,47 +202,47 @@ void *input(void * voidOpsData) {
 
 		pthread_mutex_unlock(&mutex);
 
-		if(opsData->rFlag == 1) srand(opsData->seed);
-		for(int i = 0, rand_val = 0; i < opsData->saltLen; i++) {
-			rand_val = rand();
-			rand_val %= strlen(salt_chars);
-			shortSalt[i] = salt_chars[rand_val];
-		}
-		
-		switch(opsData->algo) {
+		if(token != NULL) {
+			if(opsData->rFlag == 1) srand(opsData->seed);				// seeding rand if rFlag is set
 
-			case 0:
-				preHash = (char *) malloc(opsData->saltLen + 1);
-				shortSalt[opsData->saltLen] = '\0';
-				strcpy(preHash, shortSalt);
-				break;
+			for(int i = 0, rand_val = 0; i < opsData->saltLen; i++) {	// generating a salt for a given salt length
+				rand_val = rand();
+				rand_val %= strlen(salt_chars);
+				shortSalt[i] = salt_chars[rand_val];
+			}
+			
+			switch(opsData->algo) {										// formatting the salt for crypt_r() depending on algorithm choice
 
-			case 1:
-				preHash = (char *) malloc(opsData->saltLen + 5);
-				shortSalt[opsData->saltLen] = '\0';
-				sprintf(preHash, "$%d$%s$", opsData->algo, shortSalt);
-				break;
+				case 0:
+					preHash = (char *) malloc(opsData->saltLen + 1);
+					shortSalt[opsData->saltLen] = '\0';
+					strcpy(preHash, shortSalt);
+					break;
 
-			case 5:
-			case 6:
-				sprintf(tempRounds, "rounds=%d", opsData->rounds);
-				preHash = (char *) malloc(opsData->saltLen + 38);
-				shortSalt[opsData->saltLen] = '\0';
-				sprintf(preHash, "$%d$%s$%s$", opsData->algo, tempRounds, shortSalt);
-				break;
+				case 1:
+					preHash = (char *) malloc(opsData->saltLen + 5);
+					shortSalt[opsData->saltLen] = '\0';
+					sprintf(preHash, "$%d$%s$", opsData->algo, shortSalt);
+					break;
 
-			default:
-				fprintf(stderr, "how did you even get here? this should already be validated...\n");
-				exit(EXIT_FAILURE);
-				break;
-		}
-		if(token == NULL) {
+				case 5:
+				case 6:
+					sprintf(tempRounds, "rounds=%d", opsData->rounds);
+					preHash = (char *) malloc(opsData->saltLen + 38);
+					shortSalt[opsData->saltLen] = '\0';
+					sprintf(preHash, "$%d$%s$%s$", opsData->algo, tempRounds, shortSalt);
+					break;
+
+				default:
+					fprintf(stderr, "how did you even get here? this should already be validated...\n");
+					exit(EXIT_FAILURE);
+					break;
+			}
+
+			crypt_r(token, preHash, &data);
+			fprintf(opsData->ofd, "%s:%s\n", token, data.output);
 			free(preHash);
-			break;
 		}
-		crypt_r(token, preHash, &data);
-		fprintf(opsData->ofd, "%s:%s\n", token, data.output);
-		free(preHash);
 
 	} while(token != NULL);
 
